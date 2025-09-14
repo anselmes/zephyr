@@ -2,6 +2,8 @@ manifest:
   remotes:
     - name: upstream
       url-base: https://github.com/zephyrproject-rtos
+    - name: anselmes
+      url-base: https://github.com/anselmes
   # zephyr-keep-sorted-start re(^\s+\- name:)
   projects:
     - name: tflite-micro
@@ -14,6 +16,18 @@ manifest:
     - name: zephyr-lang-rust
       revision: dd73abc242e995784da62352fe8c70d9a6c7ac2e
       path: modules/lang/rust
+      remote: upstream
+      groups:
+        - optional
+    - name: zephyr-lang-swift
+      revision: main
+      path: modules/lang/swift
+      remote: anselmes
+      groups:
+        - optional
+    - name: zscilib
+      path: modules/lib/zscilib
+      revision: ee3c0c405087e331aad16d167b6e4ec1c3452ba9
       remote: upstream
       groups:
         - optional
