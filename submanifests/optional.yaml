@@ -2,6 +2,8 @@ manifest:
   remotes:
     - name: upstream
       url-base: https://github.com/zephyrproject-rtos
+    - name: anselmes
+      url-base: https://github.com/anselmes
   # zephyr-keep-sorted-start re(^\s+\- name:)
   projects:
     - name: canopennode
@@ -57,6 +59,12 @@ manifest:
       revision: dd73abc242e995784da62352fe8c70d9a6c7ac2e
       path: modules/lang/rust
       remote: upstream
+      groups:
+        - optional
+    - name: zephyr-lang-swift
+      revision: main
+      path: modules/lang/swift
+      remote: anselmes
       groups:
         - optional
     - name: zscilib
