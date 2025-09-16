@@ -1,0 +1,13 @@
+manifest:
+  remotes:
+    - name: anselmes
+      url-base: https://github.com/anselmes
+  # zephyr-keep-sorted-start re(^\s+\- name:)
+  projects:
+    - name: zephyr-lang-swift
+      revision: main
+      path: modules/lang/swift
+      remote: anselmes
+      groups:
+        - optional
+# zephyr-keep-sorted-stop
