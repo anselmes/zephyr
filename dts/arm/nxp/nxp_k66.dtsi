@@ -5,6 +5,7 @@
  */
 
 #include <mem.h>
+#include <freq.h>
 #include <nxp/nxp_k6x.dtsi>
 
 &flash0 {
@@ -31,6 +32,7 @@
 					  "rx-warning", "wake-up";
 			clocks = <&sim KINETIS_SIM_BUS_CLK 0x1030 4>;
 			clk-source = <1>;
+			number-of-mb = <16>;
 			status = "disabled";
 		};
 	};

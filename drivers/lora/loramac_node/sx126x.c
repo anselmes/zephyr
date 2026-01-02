@@ -40,7 +40,7 @@ BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(semtech_sx1261) +
 #define SX126X_CALIBRATION_ALL 0x7f
 
 static const struct sx126x_config dev_config = {
-	.bus = SPI_DT_SPEC_INST_GET(0, SPI_WORD_SET(8) | SPI_TRANSFER_MSB, 0),
+	.bus = SPI_DT_SPEC_INST_GET(0, SPI_WORD_SET(8) | SPI_TRANSFER_MSB),
 #if HAVE_GPIO_ANTENNA_ENABLE
 	.antenna_enable = GPIO_DT_SPEC_INST_GET(0, antenna_enable_gpios),
 #endif
@@ -465,6 +465,7 @@ static int sx126x_lora_init(const struct device *dev)
 
 static DEVICE_API(lora, sx126x_lora_api) = {
 	.config = sx12xx_lora_config,
+	.airtime = sx12xx_airtime,
 	.send = sx12xx_lora_send,
 	.send_async = sx12xx_lora_send_async,
 	.recv = sx12xx_lora_recv,

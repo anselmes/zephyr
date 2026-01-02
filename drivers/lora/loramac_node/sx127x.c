@@ -175,7 +175,7 @@ struct sx127x_config {
 };
 
 static const struct sx127x_config dev_config = {
-	.bus = SPI_DT_SPEC_INST_GET(0, SPI_WORD_SET(8) | SPI_TRANSFER_MSB, 0),
+	.bus = SPI_DT_SPEC_INST_GET(0, SPI_WORD_SET(8) | SPI_TRANSFER_MSB),
 	.reset = GPIO_DT_SPEC_INST_GET(0, reset_gpios),
 #if DT_INST_NODE_HAS_PROP(0, antenna_enable_gpios)
 	.antenna_enable = GPIO_DT_SPEC_INST_GET(0, antenna_enable_gpios),
@@ -627,6 +627,7 @@ static int sx127x_lora_init(const struct device *dev)
 
 static DEVICE_API(lora, sx127x_lora_api) = {
 	.config = sx12xx_lora_config,
+	.airtime = sx12xx_airtime,
 	.send = sx12xx_lora_send,
 	.send_async = sx12xx_lora_send_async,
 	.recv = sx12xx_lora_recv,
