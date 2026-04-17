@@ -11,13 +11,22 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <errno.h>
+#include <string.h>
 
+#include <zephyr/autoconf.h>
 #include <zephyr/bluetooth/addr.h>
+#include <zephyr/bluetooth/assigned_numbers.h>
+#include <zephyr/bluetooth/att.h>
 #include <zephyr/bluetooth/audio/bap.h>
+#include <zephyr/bluetooth/audio/cap.h>
 #include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/byteorder.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/gap.h>
 #include <zephyr/bluetooth/iso.h>
+#include <zephyr/net_buf.h>
 #include <zephyr/sys/__assert.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/sys/util_macro.h>
 #include <zephyr/types.h>
 #include <zephyr/kernel.h>
@@ -547,6 +556,7 @@ static void stream_configured_cb(struct bt_bap_stream *stream,
 	LOG_DBG("Configured stream %p, ep %u, dir %u", stream, info.id, info.dir);
 
 	u_stream->conn_id = bt_conn_index(stream->conn);
+	u_stream->ase_id = info.id;
 	u_conn = &connections[u_stream->conn_id];
 
 	stream_state_changed(stream);
@@ -581,10 +591,10 @@ static void stream_enabled_cb(struct bt_bap_stream *stream)
 		 * the endpoint
 		 */
 		const bool start_stream =
-			(IS_ENABLED(CONFIG_BT_CENTRAL) && conn_info.role == BT_HCI_ROLE_CENTRAL &&
+			(IS_ENABLED(CONFIG_BT_CENTRAL) && conn_info.role == BT_CONN_ROLE_CENTRAL &&
 			 ep_info.dir == BT_AUDIO_DIR_SOURCE) ||
 			(IS_ENABLED(CONFIG_BT_PERIPHERAL) &&
-			 conn_info.role == BT_HCI_ROLE_PERIPHERAL &&
+			 conn_info.role == BT_CONN_ROLE_PERIPHERAL &&
 			 ep_info.dir == BT_AUDIO_DIR_SINK);
 
 		if (start_stream) {
@@ -708,7 +718,7 @@ static void stream_connected_cb(struct bt_bap_stream *stream)
 
 	(void)bt_conn_get_info(stream->conn, &conn_info);
 
-	if (conn_info.role == BT_HCI_ROLE_CENTRAL) {
+	if (conn_info.role == BT_CONN_ROLE_CENTRAL) {
 		if (ep_info.dir == BT_AUDIO_DIR_SOURCE) {
 			if (ep_info.state == BT_BAP_EP_STATE_ENABLING) {
 				/* Automatically do the receiver start ready operation for source
@@ -857,11 +867,18 @@ static void unicast_client_location_cb(struct bt_conn *conn,
 	LOG_DBG("dir %u loc %X", dir, loc);
 }
 
+static void unicast_client_supported_contexts_cb(struct bt_conn *conn,
+						 enum bt_audio_context snk_ctx,
+						 enum bt_audio_context src_ctx)
+{
+	LOG_DBG("Supported snk ctx %u src ctx %u", snk_ctx, src_ctx);
+}
+
 static void unicast_client_available_contexts_cb(struct bt_conn *conn,
 						 enum bt_audio_context snk_ctx,
 						 enum bt_audio_context src_ctx)
 {
-	LOG_DBG("snk ctx %u src ctx %u", snk_ctx, src_ctx);
+	LOG_DBG("Available snk ctx %u src ctx %u", snk_ctx, src_ctx);
 }
 
 static void unicast_client_config_cb(struct bt_bap_stream *stream,
@@ -1082,6 +1099,7 @@ static struct bt_bap_unicast_server_register_param param = {
 
 static struct bt_bap_unicast_client_cb unicast_client_cbs = {
 	.location = unicast_client_location_cb,
+	.supported_contexts = unicast_client_supported_contexts_cb,
 	.available_contexts = unicast_client_available_contexts_cb,
 	.config = unicast_client_config_cb,
 	.qos = unicast_client_qos_cb,
@@ -1114,7 +1132,7 @@ uint8_t btp_bap_discover(const void *cmd, uint16_t cmd_len,
 	u_conn = &connections[bt_conn_index(conn)];
 	(void)bt_conn_get_info(conn, &conn_info);
 
-	if (u_conn->end_points_count > 0 || conn_info.role != BT_HCI_ROLE_CENTRAL) {
+	if (u_conn->end_points_count > 0 || conn_info.role != BT_CONN_ROLE_CENTRAL) {
 		bt_conn_unref(conn);
 
 		return BTP_STATUS_FAILED;
@@ -1448,7 +1466,7 @@ uint8_t btp_ascs_configure_codec(const void *cmd, uint16_t cmd_len, void *rsp, u
 		memcpy(codec_cfg.data, cp->cc_ltvs, cp->cc_ltvs_len);
 	}
 
-	if (conn_info.role == BT_HCI_ROLE_CENTRAL) {
+	if (conn_info.role == BT_CONN_ROLE_CENTRAL) {
 		err = client_configure_codec(u_conn, conn, cp->ase_id, &codec_cfg);
 	} else {
 		err = server_configure_codec(u_conn, conn, cp->ase_id, &codec_cfg);
@@ -1533,7 +1551,7 @@ uint8_t btp_ascs_configure_qos(const void *cmd, uint16_t cmd_len, void *rsp, uin
 	}
 
 	(void)bt_conn_get_info(conn, &conn_info);
-	if (conn_info.role == BT_HCI_ROLE_PERIPHERAL) {
+	if (conn_info.role == BT_CONN_ROLE_PERIPHERAL) {
 		bt_conn_unref(conn);
 
 		return BTP_STATUS_FAILED;
@@ -1637,7 +1655,7 @@ uint8_t btp_ascs_disable(const void *cmd, uint16_t cmd_len, void *rsp, uint16_t 
 			return BTP_STATUS_FAILED;
 		}
 
-		if (conn_info.role == BT_HCI_ROLE_PERIPHERAL) {
+		if (conn_info.role == BT_CONN_ROLE_PERIPHERAL) {
 			/* The server the operation completes immediately */
 			btp_send_ascs_operation_completed_ev(conn, stream->ase_id,
 							     BT_ASCS_DISABLE_OP,
@@ -1674,7 +1692,7 @@ uint8_t btp_ascs_receiver_start_ready(const void *cmd, uint16_t cmd_len,
 		return BTP_STATUS_FAILED;
 	}
 
-	if (conn_info.role == BT_HCI_ROLE_PERIPHERAL) {
+	if (conn_info.role == BT_CONN_ROLE_PERIPHERAL) {
 		/* Cannot connect the CIS as the peripheral */
 		LOG_DBG("Cannot connect the CIS as the peripheral");
 		return BTP_STATUS_FAILED;
@@ -1762,7 +1780,7 @@ uint8_t btp_ascs_receiver_stop_ready(const void *cmd, uint16_t cmd_len,
 			return BTP_STATUS_FAILED;
 		}
 
-		if (conn_info.role == BT_HCI_ROLE_PERIPHERAL) {
+		if (conn_info.role == BT_CONN_ROLE_PERIPHERAL) {
 			/* The server the operation completes immediately */
 			btp_send_ascs_operation_completed_ev(conn, stream->ase_id, BT_ASCS_STOP_OP,
 							     BT_BAP_ASCS_RSP_CODE_SUCCESS);
@@ -1812,7 +1830,7 @@ uint8_t btp_ascs_release(const void *cmd, uint16_t cmd_len, void *rsp, uint16_t 
 			return BTP_STATUS_FAILED;
 		}
 
-		if (conn_info.role == BT_HCI_ROLE_PERIPHERAL) {
+		if (conn_info.role == BT_CONN_ROLE_PERIPHERAL) {
 			/* The server the operation completes immediately */
 			btp_send_ascs_operation_completed_ev(conn, stream->ase_id,
 							     BT_ASCS_RELEASE_OP,
@@ -1868,7 +1886,7 @@ uint8_t btp_ascs_update_metadata(const void *cmd, uint16_t cmd_len,
 			return BTP_STATUS_FAILED;
 		}
 
-		if (conn_info.role == BT_HCI_ROLE_PERIPHERAL) {
+		if (conn_info.role == BT_CONN_ROLE_PERIPHERAL) {
 			/* The server the operation completes immediately */
 			btp_send_ascs_operation_completed_ev(conn, stream->ase_id,
 							     BT_ASCS_METADATA_OP,
@@ -1898,7 +1916,7 @@ uint8_t btp_ascs_add_ase_to_cis(const void *cmd, uint16_t cmd_len,
 	}
 
 	(void)bt_conn_get_info(conn, &conn_info);
-	if (conn_info.role == BT_HCI_ROLE_PERIPHERAL) {
+	if (conn_info.role == BT_CONN_ROLE_PERIPHERAL) {
 		bt_conn_unref(conn);
 
 		return BTP_STATUS_FAILED;
@@ -1920,16 +1938,13 @@ struct btp_bap_unicast_connection *btp_bap_unicast_conn_get(size_t conn_index)
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	struct btp_bap_unicast_connection *u_conn;
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
 	if (err != 0) {
-		LOG_DBG("Failed to connect to %s (%u)", addr, err);
+		LOG_DBG("Failed to connect to %s (%u)", bt_conn_dst_str(conn), err);
 		return;
 	}
 
-	LOG_DBG("Connected: %s", addr);
+	LOG_DBG("Connected: %s", bt_conn_dst_str(conn));
 
 	u_conn = &connections[bt_conn_index(conn)];
 	memset(u_conn, 0, sizeof(*u_conn));
@@ -1938,11 +1953,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	LOG_DBG("Disconnected: %s (reason 0x%02x)", addr, reason);
+	LOG_DBG("Disconnected: %s (reason 0x%02x)", bt_conn_dst_str(conn), reason);
 }
 
 static struct bt_conn_cb conn_callbacks = {

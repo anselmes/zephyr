@@ -35,7 +35,6 @@ struct eth_litex_dev_data {
 	struct net_if *iface;
 	uint8_t mac_addr[6];
 	uint8_t txslot;
-	struct k_mutex tx_mutex;
 	struct k_sem sem_tx_ready;
 };
 
@@ -43,18 +42,18 @@ struct eth_litex_config {
 	const struct device *phy_dev;
 	void (*config_func)(const struct device *dev);
 	struct net_eth_mac_config mcfg;
-	uint32_t rx_slot_addr;
-	uint32_t rx_length_addr;
-	uint32_t rx_ev_pending_addr;
-	uint32_t rx_ev_enable_addr;
-	uint32_t tx_start_addr;
-	uint32_t tx_ready_addr;
-	uint32_t tx_slot_addr;
-	uint32_t tx_length_addr;
-	uint32_t tx_ev_pending_addr;
-	uint32_t tx_ev_enable_addr;
-	uint32_t tx_buf_addr;
-	uint32_t rx_buf_addr;
+	mem_addr_t rx_slot_addr;
+	mem_addr_t rx_length_addr;
+	mem_addr_t rx_ev_pending_addr;
+	mem_addr_t rx_ev_enable_addr;
+	mem_addr_t tx_start_addr;
+	mem_addr_t tx_ready_addr;
+	mem_addr_t tx_slot_addr;
+	mem_addr_t tx_length_addr;
+	mem_addr_t tx_ev_pending_addr;
+	mem_addr_t tx_ev_enable_addr;
+	mem_addr_t tx_buf_addr;
+	mem_addr_t rx_buf_addr;
 	uint8_t tx_buf_n;
 	uint8_t rx_buf_n;
 };
@@ -64,7 +63,6 @@ static int eth_initialize(const struct device *dev)
 	const struct eth_litex_config *config = dev->config;
 	struct eth_litex_dev_data *context = dev->data;
 
-	k_mutex_init(&context->tx_mutex);
 	k_sem_init(&context->sem_tx_ready, 1, 1);
 
 	config->config_func(dev);
@@ -81,8 +79,6 @@ static int eth_tx(const struct device *dev, struct net_pkt *pkt)
 	const struct eth_litex_config *config = dev->config;
 	int ret;
 
-	k_mutex_lock(&context->tx_mutex, K_FOREVER);
-
 	/* get data from packet and send it */
 	len = net_pkt_get_len(pkt);
 	net_pkt_read(pkt,
@@ -95,7 +91,8 @@ static int eth_tx(const struct device *dev, struct net_pkt *pkt)
 	/* wait for the device to be ready to transmit */
 	ret = k_sem_take(&context->sem_tx_ready, MAX_TX_FAILURE);
 	if (ret < 0) {
-		goto error;
+		LOG_ERR("TX fifo failed");
+		return -EIO;
 	};
 	/* start transmitting */
 	litex_write8(1, config->tx_start_addr);
@@ -103,13 +100,7 @@ static int eth_tx(const struct device *dev, struct net_pkt *pkt)
 	/* change slot */
 	context->txslot = (context->txslot + 1) % config->tx_buf_n;
 
-	k_mutex_unlock(&context->tx_mutex);
-
 	return 0;
-error:
-	k_mutex_unlock(&context->tx_mutex);
-	LOG_ERR("TX fifo failed");
-	return -EIO;
 }
 
 static void eth_rx(const struct device *port)
@@ -182,19 +173,16 @@ static int eth_set_config(const struct device *dev, enum ethernet_config_type ty
 			  const struct ethernet_config *config)
 {
 	struct eth_litex_dev_data *context = dev->data;
-	int ret = -ENOTSUP;
 
 	switch (type) {
 	case ETHERNET_CONFIG_TYPE_MAC_ADDRESS:
 		memcpy(context->mac_addr, config->mac_address.addr, sizeof(context->mac_addr));
-		ret = net_if_set_link_addr(context->iface, context->mac_addr,
-					   sizeof(context->mac_addr), NET_LINK_ETHERNET);
-		break;
+		return 0;
 	default:
 		break;
 	}
 
-	return ret;
+	return -ENOTSUP;
 }
 
 static int eth_start(const struct device *dev)
@@ -255,9 +243,7 @@ static void eth_iface_init(struct net_if *iface)
 	struct eth_litex_dev_data *context = port->data;
 
 	/* set interface */
-	if (context->iface == NULL) {
-		context->iface = iface;
-	}
+	context->iface = iface;
 
 	/* initialize ethernet L2 */
 	ethernet_init(iface);
