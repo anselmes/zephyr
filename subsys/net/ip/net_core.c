@@ -57,7 +57,8 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 #include "dhcpv4/dhcpv4_internal.h"
 #include "dhcpv6/dhcpv6_internal.h"
 
-#include "route.h"
+#include "route_ipv4.h"
+#include "route_ipv6.h"
 
 #include "packet_socket.h"
 #include "canbus_socket.h"
@@ -68,11 +69,11 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 
 #include "net_stats.h"
 
+#include "../l2/ethernet/arp.h"
+
 #if defined(CONFIG_NET_NATIVE)
 static inline enum net_verdict process_data(struct net_pkt *pkt)
 {
-	int ret;
-
 	net_packet_socket_input(pkt, ETH_P_ALL, NET_SOCK_RAW);
 
 	/* If there is no data, then drop the packet. */
@@ -84,15 +85,17 @@ static inline enum net_verdict process_data(struct net_pkt *pkt)
 	}
 
 	if (!net_pkt_is_l2_processed(pkt)) {
-		ret = net_if_recv_data(net_pkt_iface(pkt), pkt);
-		if (ret != NET_CONTINUE) {
-			if (ret == NET_DROP) {
+		enum net_verdict verdict;
+
+		verdict = net_if_recv_data(net_pkt_iface(pkt), pkt);
+		if (verdict != NET_CONTINUE) {
+			if (verdict == NET_DROP) {
 				NET_DBG("Packet %p discarded by L2", pkt);
 				net_stats_update_processing_error(
 							net_pkt_iface(pkt));
 			}
 
-			return ret;
+			return verdict;
 		}
 	}
 
@@ -161,6 +164,9 @@ again:
 /* Things to setup after we are able to RX and TX */
 static void net_post_init(void)
 {
+#if defined(CONFIG_NET_ARP)
+	net_arp_init();
+#endif
 #if defined(CONFIG_NET_LLDP)
 	net_lldp_init();
 #endif
@@ -581,7 +587,7 @@ int net_recv_data(struct net_if *iface, struct net_pkt *pkt)
 	NET_DBG("prio %d iface %p pkt %p len %zu", net_pkt_priority(pkt),
 		iface, pkt, net_pkt_get_len(pkt));
 
-	if (IS_ENABLED(CONFIG_NET_ROUTING)) {
+	if (IS_ENABLED(CONFIG_NET_PKT_ORIG_IFACE)) {
 		net_pkt_set_orig_iface(pkt, iface);
 	}
 
@@ -624,7 +630,8 @@ static inline void l3_init(void)
 
 	net_tcp_init();
 
-	net_route_init();
+	net_route_ipv4_init();
+	net_route_ipv6_init();
 
 	NET_DBG("Network L3 init done");
 }
@@ -688,6 +695,8 @@ static inline int services_init(void)
 	websocket_init();
 
 	net_coap_init();
+
+	net_quic_init();
 
 	net_shell_init();
 

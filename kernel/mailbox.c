@@ -9,7 +9,6 @@
  */
 
 #include <zephyr/kernel.h>
-#include <zephyr/kernel_structs.h>
 
 #include <zephyr/toolchain.h>
 #include <zephyr/linker/sections.h>
@@ -252,6 +251,8 @@ static int mbox_message_put(struct k_mbox *mbox, struct k_mbox_msg *tx_msg,
 			if ((sending_thread->base.thread_state & _THREAD_DUMMY)
 			    != 0U) {
 				z_reschedule(&mbox->lock, key);
+				SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_mbox,
+						message_put, mbox, timeout, 0);
 				return 0;
 			}
 #endif /* CONFIG_NUM_MBOX_ASYNC_MSGS */
@@ -442,23 +443,5 @@ int k_mbox_get(struct k_mbox *mbox, struct k_mbox_msg *rx_msg, void *buffer,
 }
 
 #ifdef CONFIG_OBJ_CORE_MAILBOX
-
-static int init_mailbox_obj_core_list(void)
-{
-	/* Initialize mailbox object type */
-
-	z_obj_type_init(&obj_type_mailbox, K_OBJ_TYPE_MBOX_ID,
-			offsetof(struct k_mbox, obj_core));
-
-	/* Initialize and link statically defined mailboxes */
-
-	STRUCT_SECTION_FOREACH(k_mbox, mbox) {
-		k_obj_core_init_and_link(K_OBJ_CORE(mbox), &obj_type_mailbox);
-	}
-
-	return 0;
-}
-
-SYS_INIT(init_mailbox_obj_core_list, PRE_KERNEL_1,
-	 CONFIG_KERNEL_INIT_PRIORITY_OBJECTS);
+K_OBJ_TYPE_DEFINE(obj_type_mailbox, k_mbox, K_OBJ_TYPE_MBOX_ID, NULL);
 #endif /* CONFIG_OBJ_CORE_MAILBOX */

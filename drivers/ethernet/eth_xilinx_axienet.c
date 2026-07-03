@@ -170,7 +170,7 @@ static void xilinx_axienet_rx_callback(const struct device *dma, void *user_data
 
 	LOG_DBG("Packet with %u bytes received!\n", packet_size);
 
-	/* we need to start a new DMA transfer irregardless of whether the DMA reported an error */
+	/* we need to start a new DMA transfer regardless of whether the DMA reported an error */
 	/* otherwise, the ethernet subsystem would just stop receiving */
 setup_new_transfer:
 	if (setup_dma_rx_transfer(ethdev, ethdev->config, ethdev->data)) {
@@ -362,7 +362,8 @@ static void xilinx_axienet_isr(const struct device *dev)
 	}
 }
 
-static enum ethernet_hw_caps xilinx_axienet_caps(const struct device *dev)
+static enum ethernet_hw_caps xilinx_axienet_caps(const struct device *dev,
+						 struct net_if *iface __unused)
 {
 	const struct xilinx_axienet_config *config = dev->config;
 	enum ethernet_hw_caps ret = ETHERNET_LINK_10BASE | ETHERNET_LINK_100BASE |
@@ -378,14 +379,17 @@ static enum ethernet_hw_caps xilinx_axienet_caps(const struct device *dev)
 	return ret;
 }
 
-static const struct device *xilinx_axienet_get_phy(const struct device *dev)
+static const struct device *xilinx_axienet_get_phy(const struct device *dev,
+						   struct net_if *iface __unused)
 {
 	const struct xilinx_axienet_config *config = dev->config;
 
 	return config->phy;
 }
 
-static int xilinx_axienet_get_config(const struct device *dev, enum ethernet_config_type type,
+static int xilinx_axienet_get_config(const struct device *dev,
+				     struct net_if *iface __unused,
+				     enum ethernet_config_type type,
 				     struct ethernet_config *config)
 {
 	const struct xilinx_axienet_config *dev_config = dev->config;
@@ -430,7 +434,9 @@ static void xilinx_axienet_set_mac_address(const struct xilinx_axienet_config *c
 				      (data->mac_addr[4]) | (data->mac_addr[5] << 8));
 }
 
-static int xilinx_axienet_set_config(const struct device *dev, enum ethernet_config_type type,
+static int xilinx_axienet_set_config(const struct device *dev,
+				     struct net_if *iface __unused,
+				     enum ethernet_config_type type,
 				     const struct ethernet_config *config)
 {
 	const struct xilinx_axienet_config *dev_config = dev->config;
@@ -447,21 +453,13 @@ static int xilinx_axienet_set_config(const struct device *dev, enum ethernet_con
 	}
 }
 
-static void phy_link_state_changed(const struct device *dev, struct phy_link_state *state,
+static void phy_link_state_changed(const struct device *dev __unused, struct phy_link_state *state,
 				   void *user_data)
 {
-	struct xilinx_axienet_data *data = user_data;
-
-	ARG_UNUSED(dev);
-
-	LOG_INF("Link state changed to: %s (speed %x)", state->is_up ? "up" : "down", state->speed);
+	struct net_if *iface = (struct net_if *)user_data;
 
 	/* inform the L2 driver about link event */
-	if (state->is_up) {
-		net_eth_carrier_on(data->interface);
-	} else {
-		net_eth_carrier_off(data->interface);
-	}
+	net_eth_carrier_set(iface, state->is_up);
 }
 
 static void xilinx_axienet_iface_init(struct net_if *iface)
@@ -479,7 +477,7 @@ static void xilinx_axienet_iface_init(struct net_if *iface)
 	/* carrier is initially off */
 	net_eth_carrier_off(iface);
 
-	err = phy_link_callback_set(config->phy, phy_link_state_changed, data);
+	err = phy_link_callback_set(config->phy, phy_link_state_changed, iface);
 
 	if (err) {
 		LOG_ERR("Could not set PHY link state changed handler : %d",
@@ -549,7 +547,7 @@ static int xilinx_axienet_probe(const struct device *dev)
 	return 0;
 }
 
-static int xilinx_axienet_stop(const struct device *dev)
+static int xilinx_axienet_stop(const struct device *dev, struct net_if *iface __unused)
 {
 	const struct xilinx_axienet_config *config = dev->config;
 	struct xilinx_axienet_data *data = dev->data;
@@ -591,7 +589,7 @@ static int xilinx_axienet_stop(const struct device *dev)
 	return 0;
 }
 
-static int xilinx_axienet_start(const struct device *dev)
+static int xilinx_axienet_start(const struct device *dev, struct net_if *iface __unused)
 {
 	const struct xilinx_axienet_config *config = dev->config;
 	struct xilinx_axienet_data *data = dev->data;

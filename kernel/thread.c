@@ -18,6 +18,7 @@
 #include <ksched.h>
 #include <kthread.h>
 #include <wait_q.h>
+#include <timeout_q.h>
 #include <zephyr/internal/syscall_handler.h>
 #include <kernel_internal.h>
 #include <kswap.h>
@@ -31,6 +32,9 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/llext/symbol.h>
 #include <zephyr/sys/iterable_sections.h>
+#include <zephyr/sys/minmax.h>
+
+#include <usage.h>
 
 LOG_MODULE_DECLARE(os, CONFIG_KERNEL_LOG_LEVEL);
 
@@ -49,24 +53,17 @@ static struct k_obj_core_stats_desc  thread_stats_desc = {
 };
 #endif /* CONFIG_OBJ_CORE_STATS_THREAD */
 
-static int init_thread_obj_core_list(void)
-{
-	/* Initialize mem_slab object type */
-
-#ifdef CONFIG_OBJ_CORE_THREAD
-	z_obj_type_init(&obj_type_thread, K_OBJ_TYPE_THREAD_ID,
-			offsetof(struct k_thread, obj_core));
-#endif /* CONFIG_OBJ_CORE_THREAD */
-
+/* Threads have no statically defined instances to walk; each thread links its
+ * own object core as it is created (see z_setup_new_thread()). Register the
+ * type only.
+ */
 #ifdef CONFIG_OBJ_CORE_STATS_THREAD
-	k_obj_type_stats_init(&obj_type_thread, &thread_stats_desc);
+K_OBJ_TYPE_DEFINE_TYPE_ONLY(obj_type_thread, k_thread, K_OBJ_TYPE_THREAD_ID,
+			    &thread_stats_desc);
+#else
+K_OBJ_TYPE_DEFINE_TYPE_ONLY(obj_type_thread, k_thread, K_OBJ_TYPE_THREAD_ID,
+			    NULL);
 #endif /* CONFIG_OBJ_CORE_STATS_THREAD */
-
-	return 0;
-}
-
-SYS_INIT(init_thread_obj_core_list, PRE_KERNEL_1,
-	 CONFIG_KERNEL_INIT_PRIORITY_OBJECTS);
 #endif /* CONFIG_OBJ_CORE_THREAD */
 
 
@@ -135,6 +132,22 @@ static inline int z_vrfy_k_thread_priority_get(k_tid_t thread)
 #include <zephyr/syscalls/k_thread_priority_get_mrsh.c>
 #endif /* CONFIG_USERSPACE */
 
+#ifdef CONFIG_THREAD_NAME
+static void set_thread_name(struct k_thread *thread, const char *str)
+{
+	if (str != NULL) {
+		strncpy(thread->name, str, CONFIG_THREAD_MAX_NAME_LEN - 1);
+		/* Ensure NULL termination, truncate if longer */
+		thread->name[CONFIG_THREAD_MAX_NAME_LEN - 1] = '\0';
+#ifdef CONFIG_ARCH_HAS_THREAD_NAME_HOOK
+		arch_thread_name_set(thread, str);
+#endif /* CONFIG_ARCH_HAS_THREAD_NAME_HOOK */
+	} else {
+		thread->name[0] = '\0';
+	}
+}
+#endif /* CONFIG_THREAD_NAME */
+
 int z_impl_k_thread_name_set(k_tid_t thread, const char *str)
 {
 #ifdef CONFIG_THREAD_NAME
@@ -142,12 +155,7 @@ int z_impl_k_thread_name_set(k_tid_t thread, const char *str)
 		thread = _current;
 	}
 
-	strncpy(thread->name, str, CONFIG_THREAD_MAX_NAME_LEN - 1);
-	thread->name[CONFIG_THREAD_MAX_NAME_LEN - 1] = '\0';
-
-#ifdef CONFIG_ARCH_HAS_THREAD_NAME_HOOK
-	arch_thread_name_set(thread, str);
-#endif /* CONFIG_ARCH_HAS_THREAD_NAME_HOOK */
+	set_thread_name(thread, str);
 
 	SYS_PORT_TRACING_OBJ_FUNC(k_thread, name_set, thread, 0);
 
@@ -291,7 +299,7 @@ static inline int z_vrfy_k_thread_name_copy(k_tid_t thread,
 	/* Special case: we allow reading the names of initialized threads
 	 * even if we don't have permission on them
 	 */
-	if ((thread == NULL) || (ko->type != K_OBJ_THREAD) ||
+	if ((ko == NULL) || (ko->type != K_OBJ_THREAD) ||
 		((ko->flags & K_OBJ_FLAG_INITIALIZED) == 0)) {
 		return -EINVAL;
 	}
@@ -666,17 +674,7 @@ char *z_setup_new_thread(struct k_thread *new_thread,
 	k_spin_unlock(&z_thread_monitor_lock, key);
 #endif /* CONFIG_THREAD_MONITOR */
 #ifdef CONFIG_THREAD_NAME
-	if (name != NULL) {
-		strncpy(new_thread->name, name,
-			CONFIG_THREAD_MAX_NAME_LEN - 1);
-		/* Ensure NULL termination, truncate if longer */
-		new_thread->name[CONFIG_THREAD_MAX_NAME_LEN - 1] = '\0';
-#ifdef CONFIG_ARCH_HAS_THREAD_NAME_HOOK
-		arch_thread_name_set(new_thread, name);
-#endif /* CONFIG_ARCH_HAS_THREAD_NAME_HOOK */
-	} else {
-		new_thread->name[0] = '\0';
-	}
+	set_thread_name(new_thread, name);
 #endif /* CONFIG_THREAD_NAME */
 #ifdef CONFIG_SCHED_CPU_MASK
 	if (IS_ENABLED(CONFIG_SCHED_CPU_MASK_PIN_ONLY)) {
@@ -720,8 +718,8 @@ char *z_setup_new_thread(struct k_thread *new_thread,
 }
 
 #ifdef CONFIG_THREAD_RUNTIME_STACK_SAFETY
-int z_impl_k_thread_runtime_stack_safety_unused_threshold_pct_set(struct k_thread *thread,
-								  uint32_t pct)
+int z_impl_k_thread_runtime_stack_unused_threshold_pct_set(struct k_thread *thread,
+							   uint32_t pct)
 {
 	size_t unused_threshold;
 
@@ -736,8 +734,8 @@ int z_impl_k_thread_runtime_stack_safety_unused_threshold_pct_set(struct k_threa
 	return 0;
 }
 
-int z_impl_k_thread_runtime_stack_safety_unused_threshold_set(struct k_thread *thread,
-							      size_t threshold)
+int z_impl_k_thread_runtime_stack_unused_threshold_set(struct k_thread *thread,
+						       size_t threshold)
 {
 	if (threshold > thread->stack_info.size) {
 		return -EINVAL;
@@ -748,37 +746,37 @@ int z_impl_k_thread_runtime_stack_safety_unused_threshold_set(struct k_thread *t
 	return 0;
 }
 
-size_t z_impl_k_thread_runtime_stack_safety_unused_threshold_get(struct k_thread *thread)
+size_t z_impl_k_thread_runtime_stack_unused_threshold_get(struct k_thread *thread)
 {
 	return thread->stack_info.usage.unused_threshold;
 }
 
 #ifdef CONFIG_USERSPACE
-int z_vrfy_k_thread_runtime_stack_safety_unused_threshold_pct_set(struct k_thread *thread,
-								  uint32_t pct)
+int z_vrfy_k_thread_runtime_stack_unused_threshold_pct_set(struct k_thread *thread,
+							   uint32_t pct)
 {
 	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
 
-	return z_impl_k_thread_runtime_stack_safety_unused_threshold_pct_set(thread, pct);
+	return z_impl_k_thread_runtime_stack_unused_threshold_pct_set(thread, pct);
 }
-#include <zephyr/syscalls/k_thread_runtime_stack_safety_unused_threshold_pct_set_mrsh.c>
+#include <zephyr/syscalls/k_thread_runtime_stack_unused_threshold_pct_set_mrsh.c>
 
-int z_vrfy_k_thread_runtime_stack_safety_unused_threshold_set(struct k_thread *thread,
-							      size_t threshold)
+int z_vrfy_k_thread_runtime_stack_unused_threshold_set(struct k_thread *thread,
+						       size_t threshold)
 {
 	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
 
-	return z_impl_k_thread_runtime_stack_safety_unused_threshold_set(thread, threshold);
+	return z_impl_k_thread_runtime_stack_unused_threshold_set(thread, threshold);
 }
-#include <zephyr/syscalls/k_thread_runtime_stack_safety_unused_threshold_set_mrsh.c>
+#include <zephyr/syscalls/k_thread_runtime_stack_unused_threshold_set_mrsh.c>
 
-size_t z_vrfy_k_thread_runtime_stack_safety_unused_threshold_get(struct k_thread *thread)
+size_t z_vrfy_k_thread_runtime_stack_unused_threshold_get(struct k_thread *thread)
 {
 	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
 
-	return z_impl_k_thread_runtime_stack_safety_unused_threshold_get(thread);
+	return z_impl_k_thread_runtime_stack_unused_threshold_get(thread);
 }
-#include <zephyr/syscalls/k_thread_runtime_stack_safety_unused_threshold_get_mrsh.c>
+#include <zephyr/syscalls/k_thread_runtime_stack_unused_threshold_get_mrsh.c>
 #endif /* CONFIG_USERSPACE */
 #endif /* CONFIG_THREAD_RUNTIME_STACK_SAFETY */
 
@@ -1030,12 +1028,27 @@ int k_thread_runtime_stack_safety_threshold_check(const struct k_thread *thread,
 {
 	int    rv;
 	size_t unused_space;
+	size_t threshold;
+	size_t scan_size;
 
 	__ASSERT_NO_MSG(thread != NULL);
 
+	threshold = thread->stack_info.usage.unused_threshold;
+	scan_size = threshold;
+
+	/* z_stack_space_get() reserves the first bytes of the stack buffer for
+	 * the stack sentinel and shrinks its scan window by that amount. Grow
+	 * the requested window by the same reservation so that up to
+	 * 'threshold' bytes of the usable stack are actually examined;
+	 * otherwise a fully unused window would report fewer than 'threshold'
+	 * unused bytes and spuriously trip the threshold.
+	 */
+	if (IS_ENABLED(CONFIG_STACK_SENTINEL) && (threshold != 0U)) {
+		scan_size += sizeof(uint32_t);
+	}
+
 	rv = z_stack_space_get((const uint8_t *)thread->stack_info.start,
-			       thread->stack_info.usage.unused_threshold,
-			       &unused_space);
+			       scan_size, &unused_space);
 
 	if (rv != 0) {
 		return rv;
@@ -1045,23 +1058,12 @@ int k_thread_runtime_stack_safety_threshold_check(const struct k_thread *thread,
 		*unused_ptr = unused_space;
 	}
 
-	if ((unused_space < thread->stack_info.usage.unused_threshold) &&
-	    (handler != NULL)) {
+	if ((unused_space < threshold) && (handler != NULL)) {
 		handler(thread, unused_space, arg);
 	}
 
 	return 0;
 }
-
-#ifdef CONFIG_USERSPACE
-int z_vrfy_k_thread_runtime_stack_safety_unused_threshold_get(struct k_thread *thread)
-{
-	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
-
-	return z_impl_k_thread_runtime_stack_safety_unused_threshold_set(thread);
-}
-#include <zephyr/syscalls/k_thread_runtime_stack_safety_unused_threshold_get_mrsh.c>
-#endif /* CONFIG_USERSPACE */
 #endif /* CONFIG_THREAD_RUNTIME_STACK_SAFETY */
 
 int z_impl_k_thread_stack_space_get(const struct k_thread *thread,
@@ -1365,3 +1367,279 @@ void z_dummy_thread_init(struct k_thread *dummy_thread)
 
 	z_current_thread_set(dummy_thread);
 }
+
+/*
+ * Thread lifecycle APIs: suspend, resume, priority, wakeup, abort, join.
+ *
+ * These APIs operate on thread objects and belong here in thread.c.  They
+ * depend on a small set of scheduler internals (z_thread_halt,
+ * z_sched_ready_locked, z_sched_add_to_waitq_locked) exposed via ksched.h.
+ */
+
+void z_impl_k_thread_priority_set(k_tid_t thread, int prio)
+{
+	/*
+	 * Use NULL, since we cannot know what the entry point is (we do not
+	 * keep track of it) and idle cannot change its priority.
+	 */
+	Z_ASSERT_VALID_PRIO(prio, NULL);
+
+	bool need_sched = z_thread_prio_set((struct k_thread *)thread, prio);
+
+	if ((need_sched) && (IS_ENABLED(CONFIG_SMP) ||
+			     (_current->base.sched_locked == 0U))) {
+		z_reschedule_unlocked();
+	}
+}
+
+#ifdef CONFIG_USERSPACE
+static inline void z_vrfy_k_thread_priority_set(k_tid_t thread, int prio)
+{
+	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
+	K_OOPS(K_SYSCALL_VERIFY_MSG(_is_valid_prio(prio, NULL),
+				    "invalid thread priority %d", prio));
+#ifndef CONFIG_USERSPACE_THREAD_MAY_RAISE_PRIORITY
+	K_OOPS(K_SYSCALL_VERIFY_MSG((int8_t)prio >= thread->base.prio,
+				    "thread priority may only be downgraded (%d < %d)",
+				    prio, thread->base.prio));
+#endif /* CONFIG_USERSPACE_THREAD_MAY_RAISE_PRIORITY */
+	z_impl_k_thread_priority_set(thread, prio);
+}
+#include <zephyr/syscalls/k_thread_priority_set_mrsh.c>
+#endif /* CONFIG_USERSPACE */
+
+void z_impl_k_thread_suspend(k_tid_t thread)
+{
+	SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_thread, suspend, thread);
+
+	/* Special case "suspend the current thread" as it doesn't
+	 * need the async complexity below.
+	 */
+	if (!IS_ENABLED(CONFIG_SMP) && (thread == _current) && !arch_is_in_isr()) {
+		z_thread_suspend_current(thread);
+		return;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+
+	if (unlikely(z_is_thread_suspended(thread))) {
+
+		/* The target thread is already suspended. Nothing to do. */
+
+		k_spin_unlock(&_sched_spinlock, key);
+		return;
+	}
+
+	z_thread_halt(thread, key, false);
+
+	SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_thread, suspend, thread);
+}
+
+#ifdef CONFIG_USERSPACE
+static inline void z_vrfy_k_thread_suspend(k_tid_t thread)
+{
+	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
+	z_impl_k_thread_suspend(thread);
+}
+#include <zephyr/syscalls/k_thread_suspend_mrsh.c>
+#endif /* CONFIG_USERSPACE */
+
+void z_impl_k_thread_resume(k_tid_t thread)
+{
+	SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_thread, resume, thread);
+
+	k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+
+	/* Do not try to resume a thread that was not suspended */
+	if (unlikely(!z_is_thread_suspended(thread))) {
+		k_spin_unlock(&_sched_spinlock, key);
+		return;
+	}
+
+	z_mark_thread_as_not_suspended(thread);
+	z_sched_ready_locked(thread);
+
+	z_reschedule(&_sched_spinlock, key);
+
+	SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_thread, resume, thread);
+}
+
+#ifdef CONFIG_USERSPACE
+static inline void z_vrfy_k_thread_resume(k_tid_t thread)
+{
+	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
+	z_impl_k_thread_resume(thread);
+}
+#include <zephyr/syscalls/k_thread_resume_mrsh.c>
+#endif /* CONFIG_USERSPACE */
+
+void z_impl_k_wakeup(k_tid_t thread)
+{
+	SYS_PORT_TRACING_OBJ_FUNC(k_thread, wakeup, thread);
+
+	k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+
+	if (z_is_thread_sleeping(thread)) {
+		(void)z_try_abort_thread_timeout(thread);
+		z_mark_thread_as_not_sleeping(thread);
+		z_sched_ready_locked(thread);
+		z_reschedule(&_sched_spinlock, key);
+	} else {
+		k_spin_unlock(&_sched_spinlock, key);
+	}
+}
+
+#ifdef CONFIG_USERSPACE
+static inline void z_vrfy_k_wakeup(k_tid_t thread)
+{
+	K_OOPS(K_SYSCALL_OBJ(thread, K_OBJ_THREAD));
+	z_impl_k_wakeup(thread);
+}
+#include <zephyr/syscalls/k_wakeup_mrsh.c>
+#endif /* CONFIG_USERSPACE */
+
+void z_thread_abort(struct k_thread *thread)
+{
+	bool essential = z_is_thread_essential(thread);
+	k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+
+	if (z_is_thread_dead(thread)) {
+		k_spin_unlock(&_sched_spinlock, key);
+		return;
+	}
+
+	z_thread_halt(thread, key, true);
+
+	if (essential) {
+		__ASSERT(!essential, "aborted essential thread %p", thread);
+		k_panic();
+	}
+}
+
+#if !defined(CONFIG_ARCH_HAS_THREAD_ABORT)
+void z_impl_k_thread_abort(k_tid_t thread)
+{
+	SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_thread, abort, thread);
+
+	z_thread_abort(thread);
+
+	__ASSERT_NO_MSG(z_is_thread_dead(thread));
+
+	SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_thread, abort, thread);
+}
+#endif /* !CONFIG_ARCH_HAS_THREAD_ABORT */
+
+int z_impl_k_thread_join(struct k_thread *thread, k_timeout_t timeout)
+{
+	k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+	int ret;
+
+	SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_thread, join, thread, timeout);
+
+	if (z_is_thread_dead(thread)) {
+		z_sched_switch_spin(thread);
+		ret = 0;
+	} else if (K_TIMEOUT_EQ(timeout, K_NO_WAIT)) {
+		ret = -EBUSY;
+	} else if ((thread == _current) ||
+		   (thread->base.pended_on == &_current->join_queue)) {
+		ret = -EDEADLK;
+	} else {
+		__ASSERT(!arch_is_in_isr(), "cannot join in ISR");
+		z_sched_add_to_waitq_locked(_current, &thread->join_queue);
+		z_add_thread_timeout(_current, timeout);
+
+		SYS_PORT_TRACING_OBJ_FUNC_BLOCKING(k_thread, join, thread, timeout);
+		ret = z_swap(&_sched_spinlock, key);
+		SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_thread, join, thread, timeout, ret);
+
+		return ret;
+	}
+
+	SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_thread, join, thread, timeout, ret);
+
+	k_spin_unlock(&_sched_spinlock, key);
+	return ret;
+}
+
+#ifdef CONFIG_USERSPACE
+/* Special case: don't oops if the thread is uninitialized.  This is because
+ * the initialization bit does double-duty for thread objects; if false, means
+ * the thread object is truly uninitialized, or the thread ran and exited for
+ * some reason.
+ *
+ * Return true in this case indicating we should just do nothing and return
+ * success to the caller.
+ */
+static bool thread_obj_validate(struct k_thread *thread)
+{
+	struct k_object *ko = k_object_find(thread);
+	int ret = k_object_validate(ko, K_OBJ_THREAD, _OBJ_INIT_TRUE);
+
+	switch (ret) {
+	case 0:
+		return false;
+	case -EINVAL:
+		return true;
+	default:
+#ifdef CONFIG_LOG
+		k_object_dump_error(ret, thread, ko, K_OBJ_THREAD);
+#endif /* CONFIG_LOG */
+		/* ret is a non-zero error code here (the 0 and -EINVAL cases
+		 * are handled above), so this branch must always oops. Passing
+		 * ret as the "verify" expression would treat the failure code as
+		 * success and fall through to CODE_UNREACHABLE; verify ret == 0
+		 * so the oops is actually raised.
+		 */
+		K_OOPS(K_SYSCALL_VERIFY_MSG(ret == 0, "access denied"));
+	}
+	CODE_UNREACHABLE; /* LCOV_EXCL_LINE */
+}
+
+static inline int z_vrfy_k_thread_join(struct k_thread *thread,
+				       k_timeout_t timeout)
+{
+	if (thread_obj_validate(thread)) {
+		return 0;
+	}
+
+	return z_impl_k_thread_join(thread, timeout);
+}
+#include <zephyr/syscalls/k_thread_join_mrsh.c>
+
+static inline void z_vrfy_k_thread_abort(k_tid_t thread)
+{
+	if (thread_obj_validate(thread)) {
+		return;
+	}
+
+	K_OOPS(K_SYSCALL_VERIFY_MSG(!z_is_thread_essential(thread),
+				    "aborting essential thread %p", thread));
+
+	z_impl_k_thread_abort((struct k_thread *)thread);
+}
+#include <zephyr/syscalls/k_thread_abort_mrsh.c>
+#endif /* CONFIG_USERSPACE */
+
+bool k_can_yield(void)
+{
+	return !(k_is_pre_kernel() || k_is_in_isr() || !arch_cpu_irqs_are_enabled() ||
+		 z_is_idle_thread_object(_current));
+}
+
+void z_impl_k_yield(void)
+{
+	__ASSERT(!arch_is_in_isr(), "");
+
+	SYS_PORT_TRACING_FUNC(k_thread, yield);
+
+	z_sched_yield();
+}
+
+#ifdef CONFIG_USERSPACE
+static inline void z_vrfy_k_yield(void)
+{
+	z_impl_k_yield();
+}
+#include <zephyr/syscalls/k_yield_mrsh.c>
+#endif /* CONFIG_USERSPACE */
