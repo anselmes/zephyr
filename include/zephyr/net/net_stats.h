@@ -624,10 +624,10 @@ struct net_stats_eth_hw_timestamp {
 	/** Number of RX hardware timestamp cleared */
 	net_stats_t rx_hwtstamp_cleared;
 
-	/** Number of RX hardware timestamp timeout */
+	/** Number of TX hardware timestamp timeout */
 	net_stats_t tx_hwtstamp_timeouts;
 
-	/** Number of RX hardware timestamp skipped */
+	/** Number of TX hardware timestamp skipped */
 	net_stats_t tx_hwtstamp_skipped;
 };
 
@@ -970,7 +970,7 @@ NET_MGMT_DEFINE_REQUEST_HANDLER(NET_REQUEST_STATS_RESET_WIFI);
 
 #define NET_STATS_GET_METRIC_NAME(_name) _name
 #define NET_STATS_GET_COLLECTOR_NAME(dev_id, sfx) net_stats_##dev_id##_##sfx##_collector
-#define NET_STATS_GET_VAR(dev_id, sfx, var) zephyr_net_##var
+#define NET_STATS_GET_VAR(dev_id, sfx, var) zephyr_net_##dev_id##_##sfx##_##var
 #define NET_STATS_GET_INSTANCE(dev_id, sfx, _not_used) STRINGIFY(_##dev_id##_##sfx)
 
 /* The label value is set to be the network interface name. Note that we skip

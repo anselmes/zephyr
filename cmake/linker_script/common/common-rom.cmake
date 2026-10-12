@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # The contents of this file is based on include/zephyr/linker/common-rom.ld
-# and som of include/zephyr/linker/common-rom/*.ld
+# and some of include/zephyr/linker/common-rom/*.ld
 # Please keep in sync
 
 zephyr_linker_section(NAME init KVMA RAM_REGION GROUP RODATA_REGION)
@@ -206,6 +206,10 @@ if(CONFIG_DEVICE_DEPS)
   zephyr_linker_section_configure(SECTION device_deps INPUT .__device_deps_pass1* KEEP SORT NAME PASS LINKER_DEVICE_DEPS_PASS1)
   zephyr_linker_section_configure(SECTION device_deps INPUT .__device_deps_pass2* KEEP SORT NAME PASS NOT LINKER_DEVICE_DEPS_PASS1)
 endif()
+
+zephyr_iterable_section(NAME k_kernel_init_pre_entry KVMA RAM_REGION GROUP RODATA_REGION)
+
+zephyr_iterable_section(NAME k_kernel_init_post_entry KVMA RAM_REGION GROUP RODATA_REGION)
 
 zephyr_iterable_section(NAME _static_thread_data KVMA RAM_REGION GROUP RODATA_REGION)
 

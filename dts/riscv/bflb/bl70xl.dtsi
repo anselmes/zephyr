@@ -340,6 +340,7 @@
 		sf_ctrl: sf@4000b000 {
 			compatible = "bflb,sf-controller";
 			reg = <0x4000b000 0x1000>;
+			ranges;
 			#address-cells = <1>;
 			#size-cells = <1>;
 			status = "okay";
@@ -398,6 +399,14 @@
 		reg_aon: regulator-aon@4000f000 {
 			compatible = "bflb,aon-regulator";
 			reg = <0x4000f000 0x1000>;
+		};
+
+		ieee802154: ieee802154 {
+			compatible = "bflb,ieee802154";
+			interrupts = <64 1>, <63 1>, <65 1>;
+			interrupt-names = "m154", "m154-req-ack", "m154-aes";
+			interrupt-parent = <&clic>;
+			status = "disabled";
 		};
 	};
 };

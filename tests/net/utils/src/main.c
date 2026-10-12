@@ -1448,7 +1448,7 @@ ZTEST(test_utils_fn, test_ip_checksum)
 			      "Mismatch between reference and calculated checksum 1\n");
 	}
 
-	/* Create a different patten in the data */
+	/* Create a different pattern in the data */
 	for (int i = 0; i < CHECKSUM_TEST_LENGTH; i++) {
 		testdata[i] = (uint8_t)(i + 13) * 17;
 	}
@@ -1578,7 +1578,7 @@ ZTEST(test_utils_fn, test_linkaddr_handling)
 
 ZTEST(test_utils_fn, test_parse_ipv4_overflow)
 {
-	struct net_sockaddr_storage saddr;
+	struct net_sockaddr_storage saddr = {};
 	struct net_sockaddr *addr = net_sad(&saddr);
 	bool ret;
 
@@ -1732,7 +1732,7 @@ ZTEST(test_utils_fn, test_parse_ipv4_overflow)
 
 ZTEST(test_utils_fn, test_parse_ipv6_overflow)
 {
-	struct net_sockaddr_storage saddr;
+	struct net_sockaddr_storage saddr = {};
 	struct net_sockaddr *addr = net_sad(&saddr);
 	bool ret;
 

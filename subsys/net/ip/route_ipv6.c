@@ -91,7 +91,7 @@ struct net_route_entry *net_route_ipv6_lookup(struct net_if *iface,
 struct net_route_entry *net_route_ipv6_add(struct net_if *iface,
 					   struct net_in6_addr *addr,
 					   uint8_t prefix_len,
-					   struct net_in6_addr *nexthop,
+					   const struct net_in6_addr *nexthop,
 					   uint32_t lifetime,
 					   uint8_t preference)
 {
@@ -121,7 +121,7 @@ int net_route_ipv6_del(struct net_route_entry *route)
 }
 
 int net_route_ipv6_del_by_nexthop(struct net_if *iface,
-				  struct net_in6_addr *nexthop)
+				  const struct net_in6_addr *nexthop)
 {
 	struct net_addr addr = route_ipv6_addr(nexthop);
 
@@ -493,9 +493,18 @@ int net_route_ipv6_packet(struct net_pkt *pkt, const struct net_in6_addr *nextho
 	nbr = net_ipv6_nbr_lookup(NULL, nexthop);
 	if (nbr == NULL) {
 		if (net_route_ll_addr_supported(out_iface)) {
-			NET_DBG("Cannot find %s neighbor",
-				net_sprint_ipv6_addr(nexthop));
-			return -ENOENT;
+			if (!IS_ENABLED(CONFIG_NET_IPV6_ND)) {
+				NET_DBG("Cannot find %s neighbor",
+					net_sprint_ipv6_addr(nexthop));
+				return -ENOENT;
+			}
+
+			/* Next hop not resolved yet. Drop the link address the
+			 * packet was received with so that
+			 * net_ipv6_prepare_for_send() solicits the next hop and
+			 * queues the packet instead of dropping it.
+			 */
+			net_linkaddr_clear(net_pkt_lladdr_dst(pkt));
 		}
 	} else {
 		out_iface = nbr->iface;
@@ -514,6 +523,12 @@ int net_route_ipv6_packet(struct net_pkt *pkt, const struct net_in6_addr *nextho
 	    net_route_ll_addr_supported(out_iface) &&
 	    net_route_ll_addr_supported(net_pkt_iface(pkt)) &&
 	    net_route_ll_addr_supported(net_pkt_orig_iface(pkt))) {
+		if (nbr->idx == NET_NBR_LLADDR_UNKNOWN) {
+			NET_DBG("Neighbor %s has no link-layer (idx unknown)",
+				net_sprint_ipv6_addr(nexthop));
+			return -ESRCH;
+		}
+
 		lladdr = net_nbr_get_lladdr(nbr->idx);
 		if (lladdr == NULL) {
 			NET_DBG("Cannot find %s neighbor link layer address.",
